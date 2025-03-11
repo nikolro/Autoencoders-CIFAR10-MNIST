@@ -1,0 +1,4 @@
+# Ignore dataset files
+data/
+*.tar.gz
+*.idx3-ubyte
