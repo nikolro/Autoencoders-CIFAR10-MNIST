@@ -55,6 +55,26 @@ class SimCLR_Encoder(nn.Module):
     def forward(self, x):
         return self.encoder(x)  # 128D latent representation
 
+# **Standalone Decoder (Only for Visualization)**
+class Decoder(nn.Module):
+    def __init__(self, latent_dim=128):
+        super(Decoder, self).__init__()
+
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 128 * 7 * 7),  # Expand latent vector
+            nn.ReLU(),
+            nn.Unflatten(1, (128, 7, 7)),  # Reshape back to (128, 7, 7)
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),  # (128, 7, 7) -> (64, 14, 14)
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),  # (64, 14, 14) -> (32, 28, 28)
+            nn.ReLU(),
+            nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1),  # (32, 28, 28) -> (1, 28, 28)
+            nn.Sigmoid()  # Ensure output is between 0-1 for MNIST grayscale images
+        )
+
+    def forward(self, z):
+        return self.decoder(z)  # Output reconstructed image
+
 
 # **NT-Xent Contrastive Loss**
 class NTXentLoss(nn.Module):
