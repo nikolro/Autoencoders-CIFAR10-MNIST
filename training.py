@@ -33,8 +33,8 @@ def parse_cli():
         "--timeout",
         "-T",
         type=int,
-        default=10800,  # Default timeout of 3 hours
-        help="Timeout in seconds for cell execution (default: 10800 seconds / 3 hours)",
+        default=18000,  # Default timeout of 5 hours
+        help="Timeout in seconds for cell execution (default: 18000 seconds / 3 hours)",
         required=False,
     )
 

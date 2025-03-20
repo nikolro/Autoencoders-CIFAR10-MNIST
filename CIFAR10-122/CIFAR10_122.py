@@ -6,8 +6,11 @@ import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, random_split
 import argparse
 
+# Load CIFAR-10 dataset
 def load_data(args):
     transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))  # Normalize to [-1,1]
     ])
@@ -25,14 +28,16 @@ def load_data(args):
     
     return train_loader, val_loader, test_loader
 
-# **Updated Autoencoder (Only Encoder Part)**
+# Encoder Model with Batch Normalization
 class Encoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(Encoder, self).__init__()
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1),  # (3,32,32) → (64,16,16)
+            nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1), # (64,16,16) → (128,8,8)
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.Conv2d(128, latent_dim, kernel_size=8)              # (128,8,8) → (latent_dim,1,1)
         )
@@ -41,28 +46,32 @@ class Encoder(nn.Module):
         batch_size = x.size(0)
         return self.encoder(x).view(batch_size, -1)  # Flatten to (batch_size, latent_dim)
 
-# **Classifier Using Latent Space**
+# Classifier Model with Dropout
 class Classifier(nn.Module):
     def __init__(self, latent_dim=128, num_classes=10):
         super(Classifier, self).__init__()
         self.fc = nn.Sequential(
             nn.Linear(latent_dim, 64),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.5),  # Increased dropout to prevent overfitting
             nn.Linear(64, num_classes)
         )
 
     def forward(self, x):
         return self.fc(x)
 
-# **Train Encoder + Classifier Together**
+# Train Encoder + Classifier with Learning Rate Scheduler
 def train_encoder_classifier(encoder, classifier, train_loader, val_loader, args, epochs=15):
     encoder.train()
     classifier.train()
     
     criterion = nn.CrossEntropyLoss()
-    optimizer_encoder = optim.Adam(encoder.parameters(), lr=0.001)
-    optimizer_classifier = optim.Adam(classifier.parameters(), lr=0.001)
+    optimizer_encoder = optim.Adam(encoder.parameters(), lr=0.001, weight_decay=1e-4)  # Added weight decay
+    optimizer_classifier = optim.Adam(classifier.parameters(), lr=0.001, weight_decay=1e-4)  # Added weight decay
+
+    # Learning rate scheduler
+    scheduler_encoder = torch.optim.lr_scheduler.StepLR(optimizer_encoder, step_size=10, gamma=0.1)
+    scheduler_classifier = torch.optim.lr_scheduler.StepLR(optimizer_classifier, step_size=10, gamma=0.1)
 
     for epoch in range(epochs):
         train_loss, correct, total = 0, 0, 0
@@ -112,11 +121,16 @@ def train_encoder_classifier(encoder, classifier, train_loader, val_loader, args
 
         print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
 
-# **Main function**
+        # Step the learning rate scheduler
+        scheduler_encoder.step()
+        scheduler_classifier.step()
+
+# Main function
 def main(args):
     train_loader, val_loader, test_loader = load_data(args)
     
     encoder = Encoder(args.latent_dim).to(args.device)
     classifier = Classifier(args.latent_dim).to(args.device)
 
-    train_encoder_classifier(encoder, classifier, train_loader, val_loader, args, epochs=15) 
+    train_encoder_classifier(encoder, classifier, train_loader, val_loader, args, epochs=15)
+

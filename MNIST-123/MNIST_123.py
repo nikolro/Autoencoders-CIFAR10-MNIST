@@ -76,8 +76,7 @@ class NTXentLoss(nn.Module):
         return loss
 
 
-# **Train Encoder with Contrastive Learning**
-def train_simclr(encoder, train_loader, args, epochs=10):
+def train_simclr(encoder, train_loader, val_loader, args, epochs=10):
     encoder.train()
     optimizer = optim.Adam(encoder.parameters(), lr=0.001)
     loss_fn = NTXentLoss(temperature=0.5)
@@ -88,8 +87,8 @@ def train_simclr(encoder, train_loader, args, epochs=10):
             images = images.to(args.device)
 
             # Generate two augmented versions
-            aug1 = images + 0.05 * torch.randn_like(images)  # Add noise
-            aug2 = images + 0.05 * torch.randn_like(images)  # Add noise
+            aug1 = images + 0.05 * torch.randn_like(images)
+            aug2 = images + 0.05 * torch.randn_like(images)
 
             # Encode both augmented images
             z_i = encoder(aug1)
@@ -104,10 +103,25 @@ def train_simclr(encoder, train_loader, args, epochs=10):
 
             train_loss += loss.item()
 
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {train_loss/len(train_loader):.4f}")
+        # **Validation Step**
+        encoder.eval()  # Set to eval mode
+        val_loss = 0
+        with torch.no_grad():
+            for images, _ in val_loader:
+                images = images.to(args.device)
+                aug1 = images + 0.05 * torch.randn_like(images)
+                aug2 = images + 0.05 * torch.randn_like(images)
+                z_i = encoder(aug1)
+                z_j = encoder(aug2)
+                loss = loss_fn(z_i, z_j)
+                val_loss += loss.item()
+        encoder.train()  # Switch back to training mode
+
+        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")
 
 
-# **Classifier Model**
+
+# Define the Classifier model
 class Classifier(nn.Module):
     def __init__(self, latent_dim=128, num_classes=10):
         super(Classifier, self).__init__()
@@ -121,39 +135,52 @@ class Classifier(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
-
-# **Train Classifier on Encoded Representations**
-def train_classifier(encoder, classifier, train_loader, val_loader, args, epochs=10):
-    encoder.eval()  # Freeze encoder
+def train_classifier(autoencoder, classifier, train_loader, val_loader, args, epochs=10):
+    autoencoder.eval()  # Freeze encoder
     classifier.train()
-
+    
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(classifier.parameters(), lr=0.001)
-
+    
     for epoch in range(epochs):
         train_loss, correct, total = 0, 0, 0
         for images, labels in train_loader:
             images, labels = images.to(args.device), labels.to(args.device)
-
             with torch.no_grad():
-                latent_vectors = encoder(images)  # Get 128D representations
-
+                latent_vectors = autoencoder.encoder(images)
             outputs = classifier(latent_vectors)
+            
             loss = criterion(outputs, labels)
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+            
             train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
-
+        
         train_acc = 100. * correct / total
 
-        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss/len(train_loader):.4f}, Train Acc: {train_acc:.2f}%")
+        # Validation step
+        classifier.eval()
+        val_loss, val_correct, val_total = 0, 0, 0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(args.device), labels.to(args.device)
+                latent_vectors = autoencoder.encoder(images)
+                outputs = classifier(latent_vectors)
 
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, predicted = outputs.max(1)
+                val_total += labels.size(0)
+                val_correct += predicted.eq(labels).sum().item()
+
+        val_acc = 100. * val_correct / val_total
+        classifier.train()  # Switch back to training mode
+
+        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss/len(train_loader):.4f}, Train Acc: {train_acc:.2f}%, Val Acc: {val_acc:.2f}%")
 
 # **Main Function**
 def main(args):
