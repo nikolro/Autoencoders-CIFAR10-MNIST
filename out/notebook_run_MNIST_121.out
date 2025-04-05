@@ -1,5 +1,3 @@
 *** SLURM BATCH JOB 'notebook_run' of 'MNIST_121.ipynb' STARTING ***
 [NbConvertApp] Converting notebook /home/nikol.ro/DL/project/code/MNIST-121/MNIST_121.ipynb to notebook
-[NbConvertApp] Writing 101629 bytes to /home/nikol.ro/DL/project/code/MNIST-121/MNIST_121.ipynb
->> Running 1 notebooks with a timeout of 18000 seconds...
-*** SLURM BATCH JOB 'notebook_run' DONE ***
+slurmstepd: error: *** JOB 315432 ON lambda1 CANCELLED AT 2025-04-05T21:38:54 ***

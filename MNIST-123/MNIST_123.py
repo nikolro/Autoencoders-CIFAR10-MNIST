@@ -1,147 +1,151 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, random_split
-import argparse
-import numpy as np
-import torch.nn.functional as F
+from PIL import Image
 import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.manifold import TSNE
 
 
-# **Data Augmentation for Contrastive Learning**
-transform_simclr = transforms.Compose([
-    transforms.RandomResizedCrop(28, scale=(0.8, 1.0)),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
-    transforms.RandomGrayscale(p=0.2),
-    transforms.ToTensor(),
-])
+class MNISTPair(datasets.MNIST):
+    def __getitem__(self, idx):
+        img, label = self.data[idx], self.targets[idx]
+        img = Image.fromarray(img.numpy(), mode='L')
+        
+        if self.transform:
+            view1 = self.transform(img)
+            view2 = self.transform(img)
+            
+        return view1, view2, label
 
-
-# **Load MNIST Dataset**
 def load_data(args):
-    dataset = datasets.MNIST(root=args.data_path, train=True, download=True, transform=transform_simclr)
-    test_dataset = datasets.MNIST(root=args.data_path, train=False, download=True, transform=transform_simclr)
+    transform_train = transforms.Compose([
+        transforms.RandomResizedCrop(28, scale=(0.8, 1.0)),
+        transforms.RandomRotation(15),
+        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
 
-    train_size = int(0.8 * len(dataset))
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+
+    dataset = MNISTPair(root=args.data_path, train=True, download=True, transform=transform_train)
+    test_dataset = MNISTPair(root=args.data_path, train=False, download=True, transform=transform_test)
+
+    train_size = int(0.9 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, drop_last=True)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, drop_last=True)
 
     return train_loader, val_loader, test_loader
 
-
-# **SimCLR Encoder (No Decoder)**
-class SimCLR_Encoder(nn.Module):
+class Autoencoder(nn.Module):
     def __init__(self, latent_dim=128):
-        super(SimCLR_Encoder, self).__init__()
-
+        super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),  # (1, 28, 28) -> (32, 28, 28)
+            nn.Conv2d(1, 32, 3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # (32, 28, 28) -> (64, 14, 14)
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # (64, 14, 14) -> (128, 7, 7)
-            nn.ReLU(),
-            nn.Flatten(),  # (128, 7, 7) -> 6272
-            nn.Linear(128 * 7 * 7, latent_dim)  # **Ensure latent_dim = 128**
+            nn.AdaptiveAvgPool2d(1)
         )
-
+        self.projector = nn.Sequential(
+            nn.Linear(64, 256),
+            nn.ReLU(),
+            nn.Linear(256, latent_dim)
+        )
+    
     def forward(self, x):
-        return self.encoder(x)  # 128D latent representation
+        features = self.encoder(x).squeeze()
+        projections = self.projector(features)
+        return features, projections
 
-# **Standalone Decoder (Only for Visualization)**
-class Decoder(nn.Module):
-    def __init__(self, latent_dim=128):
-        super(Decoder, self).__init__()
+def contrastive_loss(z1, z2, temperature=0.1):
+    z = torch.cat([z1, z2], dim=0)
+    z = F.normalize(z, dim=1)
+    sim_matrix = torch.matmul(z, z.T) / temperature
+    
+    positives = torch.cat([torch.diag(sim_matrix, z1.size(0)), 
+                         torch.diag(sim_matrix, -z1.size(0))])
+    negatives = sim_matrix[~torch.eye(2*z1.size(0), dtype=bool, device=z.device)].view(2*z1.size(0), -1)
+    
+    logits = torch.cat([positives.unsqueeze(1), negatives], dim=1)
+    labels = torch.zeros(2*z1.size(0), dtype=torch.long, device=z.device)
+    return F.cross_entropy(logits, labels)
 
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 128 * 7 * 7),  # Expand latent vector
-            nn.ReLU(),
-            nn.Unflatten(1, (128, 7, 7)),  # Reshape back to (128, 7, 7)
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),  # (128, 7, 7) -> (64, 14, 14)
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),  # (64, 14, 14) -> (32, 28, 28)
-            nn.ReLU(),
-            nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1),  # (32, 28, 28) -> (1, 28, 28)
-            nn.Sigmoid()  # Ensure output is between 0-1 for MNIST grayscale images
-        )
+def train_autoencoder(model, train_loader, val_loader, test_loader, args, epochs=20):
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    def forward(self, z):
-        return self.decoder(z)  # Output reconstructed image
-
-
-# **NT-Xent Contrastive Loss**
-class NTXentLoss(nn.Module):
-    def __init__(self, temperature=0.5):
-        super(NTXentLoss, self).__init__()
-        self.temperature = temperature
-
-    def forward(self, z_i, z_j):
-        # Normalize embeddings
-        z_i = F.normalize(z_i, dim=1)
-        z_j = F.normalize(z_j, dim=1)
-
-        # Compute cosine similarity
-        similarities = torch.mm(z_i, z_j.T) / self.temperature
-        labels = torch.arange(z_i.size(0)).to(z_i.device)
-
-        # Compute contrastive loss
-        loss = F.cross_entropy(similarities, labels)
-        return loss
-
-
-def train_simclr(encoder, train_loader, val_loader, args, epochs=10):
-    encoder.train()
-    optimizer = optim.Adam(encoder.parameters(), lr=0.001)
-    loss_fn = NTXentLoss(temperature=0.5)
+    train_losses, val_losses, test_losses = [], [], []
 
     for epoch in range(epochs):
-        train_loss = 0
-        for images, _ in train_loader:
-            images = images.to(args.device)
-
-            # Generate two augmented versions
-            aug1 = images + 0.05 * torch.randn_like(images)
-            aug2 = images + 0.05 * torch.randn_like(images)
-
-            # Encode both augmented images
-            z_i = encoder(aug1)
-            z_j = encoder(aug2)
-
-            # Compute contrastive loss
-            loss = loss_fn(z_i, z_j)
-
+        # ---- Train ----
+        model.train()
+        total_train_loss = 0.0
+        for x1, x2, _ in train_loader:
+            x1, x2 = x1.to(args.device), x2.to(args.device)
+            _, z1 = model(x1)
+            _, z2 = model(x2)
+            loss = contrastive_loss(z1, z2)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            total_train_loss += loss.item()
+        avg_train_loss = total_train_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
 
-            train_loss += loss.item()
-
-        # **Validation Step**
-        encoder.eval()  # Set to eval mode
-        val_loss = 0
+        # ---- Validation ----
+        model.eval()
+        total_val_loss = 0.0
         with torch.no_grad():
-            for images, _ in val_loader:
-                images = images.to(args.device)
-                aug1 = images + 0.05 * torch.randn_like(images)
-                aug2 = images + 0.05 * torch.randn_like(images)
-                z_i = encoder(aug1)
-                z_j = encoder(aug2)
-                loss = loss_fn(z_i, z_j)
-                val_loss += loss.item()
-        encoder.train()  # Switch back to training mode
+            for x1, x2, _ in val_loader:
+                x1, x2 = x1.to(args.device), x2.to(args.device)
+                _, z1 = model(x1)
+                _, z2 = model(x2)
+                loss = contrastive_loss(z1, z2)
+                total_val_loss += loss.item()
+        avg_val_loss = total_val_loss / len(val_loader)
+        val_losses.append(avg_val_loss)
 
-        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")
+        # ---- Test ----
+        total_test_loss = 0.0
+        with torch.no_grad():
+            for x1, x2, _ in test_loader:
+                x1, x2 = x1.to(args.device), x2.to(args.device)
+                _, z1 = model(x1)
+                _, z2 = model(x2)
+                loss = contrastive_loss(z1, z2)
+                total_test_loss += loss.item()
+        avg_test_loss = total_test_loss / len(test_loader)
+        test_losses.append(avg_test_loss)
 
+        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Test Loss: {avg_test_loss:.4f}")
+        scheduler.step()
 
+    # ---- Plotting ----
+    plt.figure(figsize=(10, 4))
+    plt.plot(range(1, epochs+1), train_losses, label='Train Loss')
+    plt.plot(range(1, epochs+1), val_losses, label='Validation Loss')
+    plt.plot(range(1, epochs+1), test_losses, label='Test Loss')
+    plt.title('Contrastive Loss over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
-# Define the Classifier model
 class Classifier(nn.Module):
     def __init__(self, latent_dim=128, num_classes=10):
         super(Classifier, self).__init__()
@@ -155,61 +159,133 @@ class Classifier(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
-def train_classifier(autoencoder, classifier, train_loader, val_loader, args, epochs=10):
-    autoencoder.eval()  # Freeze encoder
-    classifier.train()
-    
-    criterion = nn.CrossEntropyLoss()
+def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, epochs=15):
+    classifier = Classifier().to(args.device)
     optimizer = optim.Adam(classifier.parameters(), lr=0.001)
-    
+    criterion = nn.CrossEntropyLoss()
+
+    train_losses, val_losses, test_losses = [], [], []
+    train_accuracies, val_accuracies, test_accuracies = [], [], []
+
     for epoch in range(epochs):
-        train_loss, correct, total = 0, 0, 0
-        for images, labels in train_loader:
-            images, labels = images.to(args.device), labels.to(args.device)
+        classifier.train()
+        train_loss, train_correct = 0, 0
+        for x, _, labels in train_loader:
+            x, labels = x.to(args.device), labels.to(args.device)
             with torch.no_grad():
-                latent_vectors = autoencoder.encoder(images)
-            outputs = classifier(latent_vectors)
-            
-            loss = criterion(outputs, labels)
+                _, projections = autoencoder(x)
+            logits = classifier(projections)
+            loss = criterion(logits, labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
             train_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
-        
-        train_acc = 100. * correct / total
+            train_correct += (logits.argmax(dim=1) == labels).sum().item()
+        train_acc = 100 * train_correct / len(train_loader.dataset)
+        train_losses.append(train_loss / len(train_loader))
+        train_accuracies.append(train_acc)
 
-        # Validation step
+        # ---- Validation ----
         classifier.eval()
-        val_loss, val_correct, val_total = 0, 0, 0
+        val_loss, val_correct = 0, 0
         with torch.no_grad():
-            for images, labels in val_loader:
-                images, labels = images.to(args.device), labels.to(args.device)
-                latent_vectors = autoencoder.encoder(images)
-                outputs = classifier(latent_vectors)
+            for x, _, labels in val_loader:
+                x, labels = x.to(args.device), labels.to(args.device)
+                _, projections = autoencoder(x)
+                logits = classifier(projections)
+                val_loss += criterion(logits, labels).item()
+                val_correct += (logits.argmax(dim=1) == labels).sum().item()
+        val_acc = 100 * val_correct / len(val_loader.dataset)
+        val_losses.append(val_loss / len(val_loader))
+        val_accuracies.append(val_acc)
 
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-                _, predicted = outputs.max(1)
-                val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
+        # ---- Test ----
+        test_loss, test_correct = 0, 0
+        with torch.no_grad():
+            for x, _, labels in test_loader:
+                x, labels = x.to(args.device), labels.to(args.device)
+                _, projections = autoencoder(x)
+                logits = classifier(projections)
+                test_loss += criterion(logits, labels).item()
+                test_correct += (logits.argmax(dim=1) == labels).sum().item()
+        test_acc = 100 * test_correct / len(test_loader.dataset)
+        test_losses.append(test_loss / len(test_loader))
+        test_accuracies.append(test_acc)
 
-        val_acc = 100. * val_correct / val_total
-        classifier.train()  # Switch back to training mode
+        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_losses[-1]:.4f} | "
+              f"Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}% | Test Acc: {test_acc:.2f}%")
 
-        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss/len(train_loader):.4f}, Train Acc: {train_acc:.2f}%, Val Acc: {val_acc:.2f}%")
+    # ---- Plot Accuracy ----
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(train_accuracies, label='Train Accuracy')
+    plt.plot(val_accuracies, label='Val Accuracy')
+    plt.plot(test_accuracies, label='Test Accuracy')
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy (%)")
+    plt.title("Accuracy Over Epochs")
+    plt.legend()
+    plt.grid(True)
 
-# **Main Function**
-def main(args):
-    train_loader, val_loader, test_loader = load_data(args)
+    # ---- Plot Loss ----
+    plt.subplot(1, 2, 2)
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
+    plt.plot(test_losses, label='Test Loss')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Loss Over Epochs")
+    plt.legend()
+    plt.grid(True)
 
-    # Train Encoder with SimCLR Contrastive Learning
-    encoder = SimCLR_Encoder(args.latent_dim).to(args.device)
-    train_simclr(encoder, train_loader, args, epochs=10)
+    plt.tight_layout()
+    plt.show()
 
-    # Train Classifier on Encoded Features
-    classifier = Classifier(args.latent_dim).to(args.device)
-    train_classifier(encoder, classifier, train_loader, val_loader, args, epochs=10)
+
+def plot_tsne(model, dataloader, device):
+    '''
+    model - torch.nn.Module subclass (e.g. encoder or projection model)
+    dataloader - dataloader that yields (view1, view2, label)
+    device - 'cuda' or 'cpu'
+    '''
+    model.eval()
+
+    images_list = []
+    labels_list = []
+    latent_list = []
+
+    with torch.no_grad():
+        for view1, _, labels in dataloader:
+            view1, labels = view1.to(device), labels.to(device)
+            _,latent_vector = model(view1)
+
+            images_list.append(view1.cpu().numpy())
+            labels_list.append(labels.cpu().numpy())
+            latent_list.append(latent_vector.cpu().numpy())
+
+    images = np.concatenate(images_list, axis=0)
+    labels = np.concatenate(labels_list, axis=0)
+    latent_vectors = np.concatenate(latent_list, axis=0)
+
+    # Plot TSNE for latent space
+    tsne_latent = TSNE(n_components=2, init='random', random_state=0)
+    latent_tsne = tsne_latent.fit_transform(latent_vectors)
+
+    plt.figure(figsize=(8, 6))
+    scatter = plt.scatter(latent_tsne[:, 0], latent_tsne[:, 1], c=labels, cmap='tab10', s=10)
+    plt.colorbar(scatter)
+    plt.title('t-SNE of Latent Space')
+    plt.savefig('latent_tsne.png')
+    plt.show()
+
+    # Plot TSNE for image space
+    tsne_image = TSNE(n_components=2, init='random', random_state=42)
+    images_flattened = images.reshape(images.shape[0], -1)
+    image_tsne = tsne_image.fit_transform(images_flattened)
+
+    plt.figure(figsize=(8, 6))
+    scatter = plt.scatter(image_tsne[:, 0], image_tsne[:, 1], c=labels, cmap='tab10', s=10)
+    plt.colorbar(scatter)
+    plt.title('t-SNE of Image Space')
+    plt.savefig('image_tsne.png')
+    plt.show()

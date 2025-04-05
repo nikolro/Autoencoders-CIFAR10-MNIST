@@ -1,0 +1,5 @@
+*** SLURM BATCH JOB 'notebook_run' of 'MNIST_123.ipynb' STARTING ***
+[NbConvertApp] Converting notebook /home/nikol.ro/DL/project/code/MNIST-123/MNIST_123.ipynb to notebook
+[NbConvertApp] Writing 564225 bytes to /home/nikol.ro/DL/project/code/MNIST-123/MNIST_123.ipynb
+>> Running 1 notebooks with a timeout of 18000 seconds...
+*** SLURM BATCH JOB 'notebook_run' DONE ***

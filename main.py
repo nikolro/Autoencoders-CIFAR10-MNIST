@@ -11,6 +11,7 @@ import CIFAR10-121/CIFAR10_121
 import MNIST-122/MNIST_122
 import CIFAR10-122/CIFAR10_122
 
+
 NUM_CLASSES = 10
 
 def freeze_seeds(seed=0):

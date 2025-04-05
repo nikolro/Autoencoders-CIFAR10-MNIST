@@ -1,0 +1,5 @@
+*** SLURM BATCH JOB 'notebook_run' of 'CIFAR10_123.ipynb' STARTING ***
+[NbConvertApp] Converting notebook /home/nikol.ro/DL/project/code/CIFAR10-123/CIFAR10_123.ipynb to notebook
+[NbConvertApp] Writing 868031 bytes to /home/nikol.ro/DL/project/code/CIFAR10-123/CIFAR10_123.ipynb
+>> Running 1 notebooks with a timeout of 18000 seconds...
+*** SLURM BATCH JOB 'notebook_run' DONE ***
