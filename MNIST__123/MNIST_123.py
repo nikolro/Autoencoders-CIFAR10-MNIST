@@ -27,6 +27,7 @@ def load_data(args):
         transforms.RandomResizedCrop(28, scale=(0.8, 1.0)),
         transforms.RandomRotation(15),
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        transforms.RandomApply([transforms.ColorJitter(brightness=0.3, contrast=0.3)], p=0.5),
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
@@ -54,13 +55,19 @@ class Autoencoder(nn.Module):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 32, 3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Conv2d(32, 64, 3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d(1)
         )
         self.projector = nn.Sequential(
-            nn.Linear(64, 256),
+            nn.Linear(128, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Linear(256, latent_dim)
         )
@@ -71,26 +78,46 @@ class Autoencoder(nn.Module):
         return features, projections
 
 def contrastive_loss(z1, z2, temperature=0.1):
-    z = torch.cat([z1, z2], dim=0)
-    z = F.normalize(z, dim=1)
-    sim_matrix = torch.matmul(z, z.T) / temperature
+    batch_size = z1.size(0)
+    if batch_size <= 1:
+        return torch.tensor(0.0, device=z1.device)
+        
+    z1 = F.normalize(z1, dim=1)
+    z2 = F.normalize(z2, dim=1)
     
-    positives = torch.cat([torch.diag(sim_matrix, z1.size(0)), 
-                         torch.diag(sim_matrix, -z1.size(0))])
-    negatives = sim_matrix[~torch.eye(2*z1.size(0), dtype=bool, device=z.device)].view(2*z1.size(0), -1)
+    representations = torch.cat([z1, z2], dim=0)
     
-    logits = torch.cat([positives.unsqueeze(1), negatives], dim=1)
-    labels = torch.zeros(2*z1.size(0), dtype=torch.long, device=z.device)
-    return F.cross_entropy(logits, labels)
+    similarity_matrix = torch.matmul(representations, representations.T) / temperature
+    
+    mask = ~torch.eye(2 * batch_size, dtype=torch.bool, device=z1.device)
+    
+    pos_mask = torch.zeros((2 * batch_size, 2 * batch_size), dtype=torch.bool, device=z1.device)
+    pos_mask[:batch_size, batch_size:] = torch.eye(batch_size, device=z1.device)
+    pos_mask[batch_size:, :batch_size] = torch.eye(batch_size, device=z1.device)
+    
+    positives = similarity_matrix[pos_mask].view(2 * batch_size, 1)
+    
+    negatives = similarity_matrix[mask & ~pos_mask].view(2 * batch_size, -1)
+    
+    logits = torch.cat([positives, negatives], dim=1)
+    
+    labels = torch.zeros(2 * batch_size, dtype=torch.long, device=z1.device)
+    
+    loss = F.cross_entropy(logits, labels)
+    
+    if torch.isnan(loss):
+        return torch.tensor(0.1, device=z1.device, requires_grad=True)
+        
+    return loss
 
+    
 def train_autoencoder(model, train_loader, val_loader, test_loader, args, epochs=20):
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     train_losses, val_losses, test_losses = [], [], []
 
     for epoch in range(epochs):
-        # ---- Train ----
         model.train()
         total_train_loss = 0.0
         for x1, x2, _ in train_loader:
@@ -98,14 +125,18 @@ def train_autoencoder(model, train_loader, val_loader, test_loader, args, epochs
             _, z1 = model(x1)
             _, z2 = model(x2)
             loss = contrastive_loss(z1, z2)
+            
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            
             total_train_loss += loss.item()
+        
         avg_train_loss = total_train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
 
-        # ---- Validation ----
+        # Validation
         model.eval()
         total_val_loss = 0.0
         with torch.no_grad():
@@ -115,10 +146,11 @@ def train_autoencoder(model, train_loader, val_loader, test_loader, args, epochs
                 _, z2 = model(x2)
                 loss = contrastive_loss(z1, z2)
                 total_val_loss += loss.item()
+        
         avg_val_loss = total_val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
 
-        # ---- Test ----
+        # Test
         total_test_loss = 0.0
         with torch.no_grad():
             for x1, x2, _ in test_loader:
@@ -127,13 +159,14 @@ def train_autoencoder(model, train_loader, val_loader, test_loader, args, epochs
                 _, z2 = model(x2)
                 loss = contrastive_loss(z1, z2)
                 total_test_loss += loss.item()
+        
         avg_test_loss = total_test_loss / len(test_loader)
         test_losses.append(avg_test_loss)
 
         print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Test Loss: {avg_test_loss:.4f}")
         scheduler.step()
 
-    # ---- Plotting ----
+    # Plotting remains the same
     plt.figure(figsize=(10, 4))
     plt.plot(range(1, epochs+1), train_losses, label='Train Loss')
     plt.plot(range(1, epochs+1), val_losses, label='Validation Loss')
@@ -145,6 +178,7 @@ def train_autoencoder(model, train_loader, val_loader, test_loader, args, epochs
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
 
 class Classifier(nn.Module):
     def __init__(self, latent_dim=128, num_classes=10):

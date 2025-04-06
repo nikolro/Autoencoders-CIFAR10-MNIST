@@ -9,7 +9,7 @@ MAIL_USER="nikol.ro@campus.technion.ac.il"
 MAIL_TYPE=ALL # Valid values are NONE, BEGIN, END, FAIL, REQUEUE, ALL
 # Define the output directory
 OUTPUT_DIR="/home/nikol.ro/DL/project/code/out"
-NOTEBOOK_PATH="/home/nikol.ro/DL/project/code/MNIST-123/MNIST_123.ipynb"
+NOTEBOOK_PATH="/home/nikol.ro/DL/project/code/MNIST__123/MNIST_123.ipynb"
 
 # Create the output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR

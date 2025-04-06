@@ -9,14 +9,14 @@ MAIL_USER="nikol.ro@campus.technion.ac.il"
 MAIL_TYPE=ALL # Valid values are NONE, BEGIN, END, FAIL, REQUEUE, ALL
 # Define the output directory
 OUTPUT_DIR="/home/nikol.ro/DL/project/code/out"
-NOTEBOOK_PATH="/home/nikol.ro/DL/project/code/CIFAR10-121/CIFAR10_121.ipynb"
+NOTEBOOK_PATH="/home/nikol.ro/DL/project/code/MNIST__122/MNIST_122.ipynb"
 
 # Create the output directory if it doesn't exist
 mkdir -p $OUTPUT_DIR
 
 # Function to run the notebook
 run_notebook(){
-  NOTEBOOK_NAME="CIFAR10_121.ipynb"
+  NOTEBOOK_NAME="MNIST_122.ipynb"
 
   sbatch \
     -N $NUM_NODES \
@@ -26,7 +26,7 @@ run_notebook(){
     --mail-user $MAIL_USER \
     --mail-type $MAIL_TYPE \
     --time=04:00:00 \
-    -o "${OUTPUT_DIR}/notebook_run_CIFAR10_121.out" \
+    -o "${OUTPUT_DIR}/notebook_run_MNIST_122.out" \
     <<EOF
 #!/bin/bash
 echo "*** SLURM BATCH JOB 'notebook_run' of '${NOTEBOOK_NAME}' STARTING ***"
