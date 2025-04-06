@@ -168,6 +168,7 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
     train_accuracies, val_accuracies, test_accuracies = [], [], []
 
     for epoch in range(epochs):
+        # === Train ===
         classifier.train()
         train_loss, train_correct = 0, 0
         for x, _, labels in train_loader:
@@ -185,7 +186,7 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
         train_losses.append(train_loss / len(train_loader))
         train_accuracies.append(train_acc)
 
-        # ---- Validation ----
+        # === Validation ===
         classifier.eval()
         val_loss, val_correct = 0, 0
         with torch.no_grad():
@@ -199,7 +200,7 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
         val_losses.append(val_loss / len(val_loader))
         val_accuracies.append(val_acc)
 
-        # ---- Test ----
+        # === Test ===
         test_loss, test_correct = 0, 0
         with torch.no_grad():
             for x, _, labels in test_loader:
@@ -212,10 +213,11 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
         test_losses.append(test_loss / len(test_loader))
         test_accuracies.append(test_acc)
 
-        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_losses[-1]:.4f} | "
-              f"Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}% | Test Acc: {test_acc:.2f}%")
+        print(f"Epoch {epoch+1}/{epochs} | "
+              f"Train Loss: {train_losses[-1]:.4f}, Acc: {train_acc:.2f}% | "
+              f"Val Acc: {val_acc:.2f}% | Test Acc: {test_acc:.2f}%")
 
-    # ---- Plot Accuracy ----
+    # === Plot Accuracy ===
     plt.figure(figsize=(10, 4))
     plt.subplot(1, 2, 1)
     plt.plot(train_accuracies, label='Train Accuracy')
@@ -227,7 +229,7 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
     plt.legend()
     plt.grid(True)
 
-    # ---- Plot Loss ----
+    # === Plot Loss ===
     plt.subplot(1, 2, 2)
     plt.plot(train_losses, label='Train Loss')
     plt.plot(val_losses, label='Val Loss')

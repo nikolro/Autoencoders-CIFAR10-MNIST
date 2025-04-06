@@ -1,3 +1,2 @@
 *** SLURM BATCH JOB 'notebook_run' of 'MNIST_121.ipynb' STARTING ***
 [NbConvertApp] Converting notebook /home/nikol.ro/DL/project/code/MNIST-121/MNIST_121.ipynb to notebook
-slurmstepd: error: *** JOB 315432 ON lambda1 CANCELLED AT 2025-04-05T21:38:54 ***

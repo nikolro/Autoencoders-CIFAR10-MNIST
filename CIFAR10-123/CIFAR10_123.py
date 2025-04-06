@@ -188,17 +188,13 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
     criterion = nn.NLLLoss()
     optimizer = optim.Adam(classifier.parameters(), lr=0.001)
 
-    train_losses = []
-    val_losses = []
-    train_accuracies = []
-    val_accuracies = []
+    train_losses, val_losses, test_losses = [], [], []
+    train_accuracies, val_accuracies, test_accuracies = [], [], []
 
     for epoch in range(epochs):
-        # Training
+        # --- Training ---
         classifier.train()
-        total_loss = 0
-        correct = 0
-        total = 0
+        total_loss, correct, total = 0, 0, 0
         for x, _, labels in train_loader:
             x, labels = x.to(args.device), labels.to(args.device)
             with torch.no_grad():
@@ -213,15 +209,12 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
             correct += (preds == labels).sum().item()
             total += labels.size(0)
         train_acc = 100. * correct / total
-        train_loss = total_loss / len(train_loader)
-        train_losses.append(train_loss)
+        train_losses.append(total_loss / len(train_loader))
         train_accuracies.append(train_acc)
 
-        # Validation
+        # --- Validation ---
         classifier.eval()
-        val_loss = 0
-        val_correct = 0
-        val_total = 0
+        val_loss, val_correct, val_total = 0, 0, 0
         with torch.no_grad():
             for x, _, labels in val_loader:
                 x, labels = x.to(args.device), labels.to(args.device)
@@ -233,33 +226,54 @@ def train_classifier(autoencoder, train_loader, val_loader, test_loader, args, e
                 val_correct += (preds == labels).sum().item()
                 val_total += labels.size(0)
         val_acc = 100. * val_correct / val_total
-        val_loss = val_loss / len(val_loader)
-        val_losses.append(val_loss)
+        val_losses.append(val_loss / len(val_loader))
         val_accuracies.append(val_acc)
 
-        print(f"Epoch [{epoch+1}/{epochs}] - Train Acc: {train_acc:.2f}% | Train Loss: {train_loss:.4f} | Val Acc: {val_acc:.2f}% | Val Loss: {val_loss:.4f}")
+        # --- Test ---
+        test_loss, test_correct, test_total = 0, 0, 0
+        with torch.no_grad():
+            for x, _, labels in test_loader:
+                x, labels = x.to(args.device), labels.to(args.device)
+                _, projections = autoencoder(x)
+                outputs = classifier(projections)
+                loss = criterion(outputs, labels)
+                test_loss += loss.item()
+                preds = outputs.argmax(dim=1)
+                test_correct += (preds == labels).sum().item()
+                test_total += labels.size(0)
+        test_acc = 100. * test_correct / test_total
+        test_losses.append(test_loss / len(test_loader))
+        test_accuracies.append(test_acc)
 
-    # Plot Loss
-    plt.figure(figsize=(8, 4))
-    plt.plot(range(1, epochs + 1), train_losses, label='Train Loss')
-    plt.plot(range(1, epochs + 1), val_losses, label='Val Loss')
-    plt.title('Classifier Loss over Epochs')
+        print(f"Epoch [{epoch+1}/{epochs}] | "
+              f"Train Acc: {train_acc:.2f}%, Loss: {train_losses[-1]:.4f} | "
+              f"Val Acc: {val_acc:.2f}%, Loss: {val_losses[-1]:.4f} | "
+              f"Test Acc: {test_acc:.2f}%, Loss: {test_losses[-1]:.4f}")
+
+    # --- Plot Loss ---
+    plt.figure(figsize=(10, 4))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
+    plt.plot(test_losses, label='Test Loss')
+    plt.title('Loss over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
     plt.show()
 
-    # Plot Accuracy
-    plt.figure(figsize=(8, 4))
-    plt.plot(range(1, epochs + 1), train_accuracies, label='Train Accuracy')
-    plt.plot(range(1, epochs + 1), val_accuracies, label='Val Accuracy')
-    plt.title('Classifier Accuracy over Epochs')
+    # --- Plot Accuracy ---
+    plt.figure(figsize=(10, 4))
+    plt.plot(train_accuracies, label='Train Acc')
+    plt.plot(val_accuracies, label='Val Acc')
+    plt.plot(test_accuracies, label='Test Acc')
+    plt.title('Accuracy over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy (%)')
     plt.legend()
     plt.grid(True)
     plt.show()
+
 
 def plot_tsne(model, dataloader, device):
     '''

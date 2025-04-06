@@ -279,6 +279,37 @@ def visualize_reconstructions(autoencoder, dataloader, device, num_images=5):
     plt.tight_layout()
     plt.show()
 
+def linear_interpolation_mnist(autoencoder, test_loader, device, steps=10):
+    autoencoder.eval()
+
+    # Get two random images from test set
+    images, _ = next(iter(test_loader))
+    img1, img2 = images[0].unsqueeze(0).to(device), images[1].unsqueeze(0).to(device)
+
+    # Encode both images
+    with torch.no_grad():
+        z1 = autoencoder.encode(img1)  # shape [1, latent_dim]
+        z2 = autoencoder.encode(img2)
+
+    # Generate interpolations between the two latent vectors
+    interpolated_images = []
+    for alpha in np.linspace(0, 1, steps):
+        z = (1 - alpha) * z1 + alpha * z2
+        with torch.no_grad():
+            recon = autoencoder.decoder(z)
+        interpolated_images.append(recon.squeeze(0).squeeze(0).cpu())  # [1, 1, 28, 28] → [28, 28]
+
+    # Plot interpolated results
+    plt.figure(figsize=(15, 2))
+    for i, img in enumerate(interpolated_images):
+        ax = plt.subplot(1, steps, i + 1)
+        plt.imshow(img, cmap='gray')
+        ax.axis('off')
+        ax.set_title(f"{i+1}")
+    plt.suptitle("Linear Interpolation Between Two MNIST Digits", fontsize=14)
+    plt.tight_layout()
+    plt.show()
+
 def plot_tsne(model, dataloader, device):
     '''
     model - torch.nn.Module subclass. This is your encoder model

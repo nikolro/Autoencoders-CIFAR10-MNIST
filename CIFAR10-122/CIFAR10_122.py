@@ -64,11 +64,10 @@ class Classifier(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
-# Train Encoder + Classifier with Learning Rate Scheduler
-def train_encoder_classifier(encoder, classifier, train_loader, val_loader, args, epochs=15):
+def train_encoder_classifier(encoder, classifier, train_loader, val_loader, test_loader, args, epochs=15):
     encoder.train()
     classifier.train()
-    
+
     criterion = nn.CrossEntropyLoss()
     optimizer_encoder = optim.Adam(encoder.parameters(), lr=0.001, weight_decay=1e-4)
     optimizer_classifier = optim.Adam(classifier.parameters(), lr=0.001, weight_decay=1e-4)
@@ -76,18 +75,20 @@ def train_encoder_classifier(encoder, classifier, train_loader, val_loader, args
     scheduler_encoder = torch.optim.lr_scheduler.StepLR(optimizer_encoder, step_size=10, gamma=0.1)
     scheduler_classifier = torch.optim.lr_scheduler.StepLR(optimizer_classifier, step_size=10, gamma=0.1)
 
-    # Lists to store metrics
-    train_losses, val_losses = [], []
-    train_accuracies, val_accuracies = [], []
+    train_losses, val_losses, test_losses = [], [], []
+    train_accuracies, val_accuracies, test_accuracies = [], [], []
 
     for epoch in range(epochs):
+        # === TRAINING ===
+        encoder.train()
+        classifier.train()
         train_loss, correct, total = 0, 0, 0
         for images, labels in train_loader:
             images, labels = images.to(args.device), labels.to(args.device)
-            
+
             optimizer_encoder.zero_grad()
             optimizer_classifier.zero_grad()
-            
+
             latent_vectors = encoder(images)
             outputs = classifier(latent_vectors)
 
@@ -95,18 +96,16 @@ def train_encoder_classifier(encoder, classifier, train_loader, val_loader, args
             loss.backward()
             optimizer_encoder.step()
             optimizer_classifier.step()
-            
+
             train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
-        
-        train_acc = 100. * correct / total
-        train_loss /= len(train_loader)
-        train_losses.append(train_loss)
-        train_accuracies.append(train_acc)
 
-        # Validation
+        train_losses.append(train_loss / len(train_loader))
+        train_accuracies.append(100. * correct / total)
+
+        # === VALIDATION ===
         encoder.eval()
         classifier.eval()
         val_loss, val_correct, val_total = 0, 0, 0
@@ -116,46 +115,66 @@ def train_encoder_classifier(encoder, classifier, train_loader, val_loader, args
                 latent_vectors = encoder(images)
                 outputs = classifier(latent_vectors)
 
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
+                val_loss += criterion(outputs, labels).item()
                 _, predicted = outputs.max(1)
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
 
-        val_acc = 100. * val_correct / val_total
-        val_loss /= len(val_loader)
-        val_losses.append(val_loss)
-        val_accuracies.append(val_acc)
+        val_losses.append(val_loss / len(val_loader))
+        val_accuracies.append(100. * val_correct / val_total)
 
-        encoder.train()
-        classifier.train()
+        # === TEST ===
+        test_loss, test_correct, test_total = 0, 0, 0
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images, labels = images.to(args.device), labels.to(args.device)
+                latent_vectors = encoder(images)
+                outputs = classifier(latent_vectors)
 
-        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+                test_loss += criterion(outputs, labels).item()
+                _, predicted = outputs.max(1)
+                test_total += labels.size(0)
+                test_correct += predicted.eq(labels).sum().item()
+
+        test_losses.append(test_loss / len(test_loader))
+        test_accuracies.append(100. * test_correct / test_total)
+
+        print(f"Epoch [{epoch+1}/{epochs}], "
+              f"Train Loss: {train_losses[-1]:.4f}, Train Acc: {train_accuracies[-1]:.2f}%, "
+              f"Val Loss: {val_losses[-1]:.4f}, Val Acc: {val_accuracies[-1]:.2f}%, "
+              f"Test Loss: {test_losses[-1]:.4f}, Test Acc: {test_accuracies[-1]:.2f}%")
 
         scheduler_encoder.step()
         scheduler_classifier.step()
 
-    # Plot Loss
-    plt.figure(figsize=(8, 4))
+    # === PLOTS ===
+    plt.figure(figsize=(12, 4))
+    
+    # Loss plot
+    plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='Train Loss')
     plt.plot(val_losses, label='Val Loss')
+    plt.plot(test_losses, label='Test Loss')
     plt.title('Loss over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
-    plt.show()
 
-    # Plot Accuracy
-    plt.figure(figsize=(8, 4))
+    # Accuracy plot
+    plt.subplot(1, 2, 2)
     plt.plot(train_accuracies, label='Train Accuracy')
     plt.plot(val_accuracies, label='Val Accuracy')
+    plt.plot(test_accuracies, label='Test Accuracy')
     plt.title('Accuracy over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy (%)')
     plt.legend()
     plt.grid(True)
+
+    plt.tight_layout()
     plt.show()
+
 
 def plot_tsne(model, dataloader, device):
     '''
